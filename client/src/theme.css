@@ -1,0 +1,105 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+@import "tailwindcss";
+@import "tailwindcss-safe-area";
+
+@theme {
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 14px;
+  --text-sm--line-height: 20px;
+  --text-base: 16px;
+  --text-base--line-height: 24px;
+  --text-lg: 18px;
+  --text-lg--line-height: 28px;
+  --text-xl: 20px;
+  --text-xl--line-height: 28px;
+  --text-2xl: 24px;
+  --text-2xl--line-height: 32px;
+  --text-3xl: 30px;
+  --text-3xl--line-height: 36px;
+  --text-4xl: 36px;
+  --text-4xl--line-height: 40px;
+  --text-5xl: 48px;
+  --text-5xl--line-height: 52px;
+}
+
+:root {
+  color-scheme: dark;
+  /* Neutral professional — zinc surfaces, standard blue accent */
+  --bg: #0a0a0b;
+  --bg-deep: #060607;
+  --surface: #17171a;
+  --surface-2: #1f1f23;
+  --surface-alt: #2e2e33;
+  --text: #f4f4f5;
+  --dim: #a1a1aa;
+  --dim-2: #71717a;
+  --border: #26262b;
+  --border-strong: #3f3f46;
+  --accent: #3b82f6;
+  --accent-strong: #2563eb;
+  --accent-2: #60a5fa;
+  --accent-3: #22c55e;
+  --accent-soft: rgba(59, 130, 246, 0.14);
+  --on-accent: #ffffff;
+  --radius: 14px;
+  --space-surface: var(--surface);
+  --space-surface-alt: var(--surface-alt);
+  --space-muted: var(--dim);
+  --space-border: var(--border);
+  --space-accent: var(--accent);
+}
+
+html {
+  background: var(--bg-deep);
+}
+
+body {
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  background:
+    radial-gradient(1000px 480px at 50% -160px, rgba(255, 255, 255, 0.035), transparent 65%),
+    var(--bg);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: rgba(59, 130, 246, 0.45);
+  color: #fff;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-alt) transparent;
+}
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-thumb { background: var(--surface-alt); border-radius: 999px; }
+
+@keyframes poster-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes sheet-in {
+  from { opacity: 0; transform: translateY(16px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-poster-in { animation: poster-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-sheet-in { animation: sheet-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-fade-in { animation: fade-in 0.2s ease both; }
+.animate-pop-in { animation: pop-in 0.22s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-poster-in, .animate-sheet-in, .animate-fade-in, .animate-pop-in {
+    animation: none;
+  }
+}
