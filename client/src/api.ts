@@ -4,7 +4,7 @@ export function searchMovies(
   input: string,
   signal?: AbortSignal,
 ): Promise<Movie[]> {
-  const match = input.match(/\b(18\d{2}|19\d{2}|20\d{2})\s*$/);
+  const match = input.match(/\s+(18\d{2}|19\d{2}|20\d{2})\s*$/);
   const year = match ? Number(match[1]) : null;
   const title = match ? input.slice(0, match.index).trim() : input;
   const query = title

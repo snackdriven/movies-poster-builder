@@ -113,6 +113,11 @@ test("picker suggests, prevents duplicates, advances and narrows by year", async
   );
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole('button',{name:/Slot 3: empty/}).click();
+  const numericRequest=page.waitForRequest(request=>request.url().includes('/suggests/1/1917.json'));
+  await page.getByRole('searchbox').fill('1917');
+  await numericRequest;
+  await expect(page.getByRole('button',{name:/Pick Film 3 \(2002\)/})).toBeVisible();
 });
 test("complete boards export 4:5 and story PNGs and retain last poster", async ({
   page,
