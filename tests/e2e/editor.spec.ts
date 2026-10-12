@@ -11,16 +11,27 @@ const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN1sAAAAASUVORK5CYII=",
   "base64",
 );
-test('search removal also removes a matching manually entered film',async({page})=>{
-  await setup(page,0);
-  await page.getByRole('button',{name:/Slot 1: empty/}).click();
-  await page.getByRole('button',{name:'Add it manually',exact:true}).click();
-  await page.getByLabel('Movie title',{exact:true}).fill('Film 1');
-  await page.getByLabel('Release year (optional)').fill('2000');
-  await page.getByRole('button',{name:'Add movie',exact:true}).click();
-  await page.getByRole('button',{name:'Remove Film 1 from board',exact:true}).click();
-  await expect(page.getByRole('progressbar')).toHaveAttribute('aria-valuenow','0');
-  await expect(page.getByRole('button',{name:/Pick Film 1 \(2000\)/})).toBeEnabled();
+test("search removal also removes a matching manually entered film", async ({
+  page,
+}) => {
+  await setup(page, 0);
+  await page.getByRole("button", { name: /Slot 1: empty/ }).click();
+  await page
+    .getByRole("button", { name: "Add it manually", exact: true })
+    .click();
+  await page.getByLabel("Movie title", { exact: true }).fill("Film 1");
+  await page.getByLabel("Release year (optional)").fill("2000");
+  await page.getByRole("button", { name: "Add movie", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Remove Film 1 from board", exact: true })
+    .click();
+  await expect(page.getByRole("progressbar")).toHaveAttribute(
+    "aria-valuenow",
+    "0",
+  );
+  await expect(
+    page.getByRole("button", { name: /Pick Film 1 \(2000\)/ }),
+  ).toBeEnabled();
 });
 async function setup(page: Page, filled = 2, size = 9) {
   await page.route("https://m.media-amazon.com/**", (route) =>
@@ -192,13 +203,11 @@ test("manual film and uploaded poster survive backup without exposing image in s
     /^data:image/,
   );
   await page.getByRole("button", { name: "Reset board", exact: true }).click();
-  await page
-    .getByLabel("Restore board from JSON")
-    .setInputFiles({
-      name: "board.json",
-      mimeType: "application/json",
-      buffer: backup,
-    });
+  await page.getByLabel("Restore board from JSON").setInputFiles({
+    name: "board.json",
+    mimeType: "application/json",
+    buffer: backup,
+  });
   await expect(
     page.getByRole("button", {
       name: "Slot 1: Local film (1999)",

@@ -117,4 +117,3 @@ export function searchMovies(
       .finally(() => signal?.removeEventListener("abort", abort));
   });
 }
-

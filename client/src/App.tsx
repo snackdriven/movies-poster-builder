@@ -924,13 +924,16 @@ export function App() {
       </footer>
       {searchSlot !== null && (
         <SearchSheet
+          key={searchSlot}
           slot={searchSlot}
           poster={poster}
           onRemove={(movie) =>
             commit(
               {
                 ...poster,
-                slots: poster.slots.map((m) => (m && isDuplicate([m], movie) ? null : m)),
+                slots: poster.slots.map((m) =>
+                  m && isDuplicate([m], movie) ? null : m,
+                ),
               },
               "Film removed",
               true,
