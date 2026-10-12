@@ -1,5 +1,8 @@
 node_modules/
-app.db*
-audits/
 .env*
 dist/
+*.tsbuildinfo
+test-results/
+playwright-report/
+app.db*
+audits/

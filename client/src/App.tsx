@@ -1,937 +1,986 @@
-import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { SafeAreaTopScrim } from "@hatch/space-sdk/client";
-import { api, type ApiResponse } from "./api";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { searchMovies } from "./api";
+import {
+  BACKGROUNDS,
+  GRID_SIZES,
+  STORAGE_KEY,
+  encodePoster,
+  isDuplicate,
+  moveSlot,
+  normalizePoster,
+  readPoster,
+  type Movie,
+  type Format,
+  type Poster,
+} from "./poster";
+import { downloadBlob, exportPosterPng, readCover } from "./export";
 
-type Movie = ApiResponse<typeof api, "searchMovies">["results"][number];
-type Poster = ApiResponse<typeof api, "getPoster">;
-
-const GRID_SIZES = [9, 12, 15] as const;
-
-interface BgOption {
-  id: string;
-  label: string;
-  color: string;
-  light: boolean;
-}
-
-const BACKGROUNDS: BgOption[] = [
-  { id: "abyss", label: "Black", color: "#101013", light: false },
-  { id: "slate", label: "Charcoal", color: "#23262b", light: false },
-  { id: "pine", label: "Slate", color: "#334155", light: false },
-  { id: "glacier", label: "White", color: "#f4f4f5", light: true },
-];
-
-function bgOption(id: string): BgOption {
-  return BACKGROUNDS.find((b) => b.id === id) ?? BACKGROUNDS[0]!;
-}
-
-function resizeSlots(
-  slots: (Movie | null)[],
-  size: number,
-): (Movie | null)[] {
-  const out = slots.slice(0, size);
-  while (out.length < size) out.push(null);
-  return out;
-}
-
-function movieSubline(m: Movie): string {
-  const parts: string[] = [];
-  if (m.year != null) parts.push(String(m.year));
-  if (m.cast) parts.push(m.cast);
-  return parts.join(" · ");
-}
-
-/* ---------------------------------- icons --------------------------------- */
-
-function PlusIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function SearchIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
-      <path d="m20 20-3.8-3.8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function DownloadIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M12 4v11m0 0 4-4m-4 4-4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M4 19h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function CloseIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="m5 12.5 4.5 4.5L19 7.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function TypeIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M5 6V4h14v2M12 4v16m-3 0h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-/* ------------------------------ poster export ----------------------------- */
-
-function loadImage(src: string): Promise<HTMLImageElement | null> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = src;
-  });
-}
-
-function clipRoundedRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number,
-) {
-  ctx.beginPath();
-  if (typeof ctx.roundRect === "function") {
-    ctx.roundRect(x, y, w, h, r);
-  } else {
-    ctx.rect(x, y, w, h);
-  }
-}
-
-async function exportPosterPng(poster: Poster): Promise<void> {
-  const bg = bgOption(poster.background);
-  const cols = 3;
-  const rows = poster.gridSize / cols;
-  const cellW = 400;
-  const cellH = 593;
-  const gap = 22;
-  const pad = 64;
-  const radius = 20;
-  const titleText = poster.title.trim();
-  const titleH = titleText ? 132 : 0;
-  const footerH = 64;
-  const width = pad * 2 + cols * cellW + (cols - 1) * gap;
-  const height = pad * 2 + titleH + rows * cellH + (rows - 1) * gap + footerH;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Canvas is not available in this browser.");
-
-  ctx.fillStyle = bg.color;
-  ctx.fillRect(0, 0, width, height);
-
-  if (titleText) {
-    ctx.fillStyle = bg.light ? "#171717" : "#fafafa";
-    ctx.font = "800 62px Inter, system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(titleText, width / 2, pad + titleH / 2 - 14, width - pad * 2);
-    ctx.fillStyle = "#3b82f6";
-    const lineW = 120;
-    clipRoundedRect(ctx, width / 2 - lineW / 2, pad + titleH - 26, lineW, 5, 3);
-    ctx.fill();
-  }
-
-  const images = await Promise.all(
-    poster.slots.map((s) => (s ? loadImage(s.posterLg) : Promise.resolve(null))),
-  );
-
-  for (let i = 0; i < poster.gridSize; i++) {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    const x = pad + col * (cellW + gap);
-    const y = pad + titleH + row * (cellH + gap);
-    const img = images[i] ?? null;
-    if (img) {
-      ctx.save();
-      clipRoundedRect(ctx, x, y, cellW, cellH, radius);
-      ctx.clip();
-      ctx.drawImage(img, x, y, cellW, cellH);
-      ctx.restore();
-    } else {
-      ctx.fillStyle = bg.light ? "#d4d4d8" : "#26262a";
-      clipRoundedRect(ctx, x, y, cellW, cellH, radius);
-      ctx.fill();
-      ctx.fillStyle = bg.light ? "#737373" : "#a3a3a3";
-      ctx.font = "700 72px Inter, system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(String(i + 1), x + cellW / 2, y + cellH / 2);
-    }
-  }
-
-  const filledCount = poster.slots.filter((s) => s != null).length;
-  const gridBottom = pad + titleH + rows * cellH + (rows - 1) * gap;
-  ctx.fillStyle = bg.light ? "#737373" : "#8e8e93";
-  ctx.font = "700 27px Inter, system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  try {
-    (ctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing =
-      "6px";
-  } catch {
-    /* letterSpacing unsupported — footer still renders */
-  }
-  ctx.fillText(
-    `${poster.gridSize} MOVIES · RANKED ${filledCount} OF ${poster.gridSize}`,
-    width / 2,
-    gridBottom + footerH / 2 + 6,
-    width - pad * 2,
-  );
-
-  const blob = await new Promise<Blob | null>((resolve) =>
-    canvas.toBlob(resolve, "image/png"),
-  );
-  if (!blob) throw new Error("Could not render the poster image.");
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "movies-poster.png";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
-}
-
-/* --------------------------------- editor --------------------------------- */
-
-function Editor({ initial }: { initial: Poster }) {
-  const [poster, setPoster] = useState<Poster>(initial);
-  const [selected, setSelected] = useState<number | null>(null);
-  const [swapFrom, setSwapFrom] = useState<number | null>(null);
-  const [searchSlot, setSearchSlot] = useState<number | null>(null);
-  const [pendingSize, setPendingSize] = useState<number | null>(null);
-  const [confirmClear, setConfirmClear] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
-  const titleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const save = useMutation({
-    mutationFn: (p: Poster) =>
-      api.savePoster({
-        gridSize: p.gridSize,
-        title: p.title,
-        background: p.background,
-        slots: p.slots,
-      }),
-  });
-
-  function commit(next: Poster) {
-    setPoster(next);
-    save.mutate(next);
-  }
-
-  const filled = poster.slots.filter((s) => s != null).length;
-  const progress = poster.gridSize > 0 ? (filled / poster.gridSize) * 100 : 0;
-  const bg = bgOption(poster.background);
-  const selectedMovie =
-    selected != null ? (poster.slots[selected] ?? null) : null;
-
-  function onSlotTap(i: number) {
-    if (swapFrom != null) {
-      if (i !== swapFrom) {
-        const slots = [...poster.slots];
-        const tmp = slots[swapFrom] ?? null;
-        slots[swapFrom] = slots[i] ?? null;
-        slots[i] = tmp;
-        commit({ ...poster, slots });
+function Dialog({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const container = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusables = () =>
+      Array.from(
+        container.current!.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), a[href], [tabindex="0"]',
+        ),
+      ).filter((el) => el.getClientRects().length > 0);
+    const preferred =
+      container.current!.querySelector<HTMLElement>('input[type="search"]') ??
+      focusables()[0];
+    preferred?.focus();
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close.current();
       }
-      setSwapFrom(null);
-      setSelected(null);
+      if (event.key === "Tab") {
+        const elements = focusables(),
+          first = elements[0],
+          last = elements.at(-1);
+        if (
+          event.shiftKey &&
+          (document.activeElement === first ||
+            !container.current?.contains(document.activeElement))
+        ) {
+          event.preventDefault();
+          last?.focus();
+        } else if (
+          !event.shiftKey &&
+          (document.activeElement === last ||
+            !container.current?.contains(document.activeElement))
+        ) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", keydown);
+    return () => {
+      document.removeEventListener("keydown", keydown);
+      document.body.style.overflow = overflow;
+      previous?.focus();
+    };
+  }, []);
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        ref={container}
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <h2>{title}</h2>
+          <button
+            type="button"
+            className="secondary"
+            aria-label="Close dialog"
+            onClick={onClose}
+          >
+            ✕
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function SearchSheet({
+  slot,
+  poster,
+  onPick,
+  onRemove,
+  onClose,
+}: {
+  slot: number;
+  poster: Poster;
+  onPick: (movie: Movie) => void;
+  onRemove: (movie: Movie) => void;
+  onClose: () => void;
+}) {
+  const [input, setInput] = useState(""),
+    [query, setQuery] = useState(""),
+    [manual, setManual] = useState(false);
+  const [title, setTitle] = useState(""),
+    [year, setYear] = useState(""),
+    [cover, setCover] = useState("");
+  const [error, setError] = useState<string | null>(null),
+    [uploading, setUploading] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setQuery(input.trim()), 350);
+    return () => clearTimeout(timer);
+  }, [input]);
+  const search = useQuery({
+    queryKey: ["movie-search", query],
+    queryFn: ({ signal }) => searchMovies(query || "Alien", signal),
+    enabled: !manual && (query.length === 0 || query.length >= 2),
+    staleTime: 60000,
+  });
+  async function upload(file?: File) {
+    if (!file) {
+      setCover("");
       return;
     }
-    if (poster.slots[i] == null) {
-      setSelected(null);
-      setSearchSlot(i);
-    } else {
-      setSelected(selected === i ? null : i);
+    setUploading(true);
+    setError(null);
+    try {
+      setCover(await readCover(file));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Image could not be read.");
+      setCover("");
+    } finally {
+      setUploading(false);
     }
   }
-
-  function requestSize(size: number) {
-    if (size === poster.gridSize) return;
-    const dropped = poster.slots
-      .slice(size)
-      .filter((s) => s != null).length;
-    if (dropped > 0) {
-      setPendingSize(size);
-    } else {
-      applySize(size);
+  function addManual(event: React.FormEvent) {
+    event.preventDefault();
+    const movie: Movie = {
+      imdbId: `local-${Date.now()}`,
+      title: title.trim(),
+      cast: "",
+      year: year ? Number(year) : null,
+      posterMd: cover,
+      posterLg: cover,
+    };
+    if (!movie.title) {
+      setError("Enter a film title.");
+      return;
     }
+    if (isDuplicate(poster.slots, movie, slot)) {
+      setError("This movie is already on your board.");
+      return;
+    }
+    onPick(movie);
   }
+  return (
+    <Dialog
+      title={`SLOT ${slot + 1} OF ${poster.gridSize} — find a film`}
+      onClose={onClose}
+    >
+      {manual ? (
+        <form onSubmit={addManual} className="space-y-3 mt-4">
+          <label className="field">
+            Movie title
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              required
+              maxLength={200}
+            />
+          </label>
+          <label className="field">
+            Release year (optional)
+            <input
+              type="number"
+              min={1888}
+              max={2100}
+              value={year}
+              onChange={(e) => setYear(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            Cover image (optional)
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={(e) => void upload(e.target.files?.[0])}
+            />
+          </label>
+          <p className="muted text-sm">
+            Uploaded covers stay on this device. Shared links include the movie
+            details without the uploaded image.
+          </p>
+          {cover && (
+            <img
+              src={cover}
+              alt="Uploaded cover preview"
+              className="h-24 w-24 rounded-lg"
+            />
+          )}
+          {error && (
+            <p role="alert" className="error">
+              {error}
+            </p>
+          )}
+          <div className="flex gap-2">
+            <button className="primary" disabled={uploading} type="submit">
+              {uploading ? "Reading cover…" : "Add movie"}
+            </button>
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => setManual(false)}
+            >
+              Back to search
+            </button>
+          </div>
+        </form>
+      ) : (
+        <>
+          <label className="field mt-4">
+            Search movies by title or year
+            <input
+              type="search"
+              value={input}
+              maxLength={120}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Movie title — e.g. Dune 1984"
+            />
+          </label>
+          <div className="search-results">
+            {query.length < 2 && (
+              <p className="muted py-8 text-center">
+                A few suggestions to start. Search by title, optionally followed
+                by a year.
+              </p>
+            )}
+            {query.length >= 2 && search.isPending && (
+              <p role="status" className="muted py-8 text-center">
+                Searching…
+              </p>
+            )}
+            {search.isError && (
+              <div className="py-4">
+                <p role="alert" className="error">
+                  {search.error.message}
+                </p>
+                <button
+                  className="secondary mt-2"
+                  onClick={() => void search.refetch()}
+                >
+                  Try search again
+                </button>
+              </div>
+            )}
+            {search.isSuccess &&
+              query.length >= 2 &&
+              search.data.length === 0 && (
+                <p className="muted py-8 text-center">
+                  No films found. Try a different title or add it manually.
+                </p>
+              )}
+            {(query.length === 0 || query.length >= 2) && (
+              <ul className="grid grid-cols-3 gap-3 py-4">
+                {(search.data ?? []).map((movie) => {
+                  const picked = isDuplicate(poster.slots, movie, slot);
+                  return (
+                    <li key={movie.imdbId}>
+                      <button
+                        type="button"
+                        className="result"
+                        disabled={picked}
+                        onClick={() => onPick(movie)}
+                        aria-label={`Pick ${movie.title} (${movie.year ?? "year unknown"}) for slot ${slot + 1}`}
+                      >
+                        <img
+                          src={movie.posterMd}
+                          alt=""
+                          loading="lazy"
+                          className="aspect-[2/3] w-full rounded-lg object-cover"
+                        />
+                        <span className="block truncate font-semibold mt-1 text-xs">
+                          {movie.title}
+                        </span>
+                        <span className="block truncate muted text-xs">
+                          {movie.year ?? "Year unknown"}
+                        </span>
+                        {picked && (
+                          <span className="text-xs text-blue-300">
+                            On your board
+                          </span>
+                        )}
+                      </button>
+                      {picked && (
+                        <button
+                          className="secondary mt-2"
+                          onClick={() => onRemove(movie)}
+                          aria-label={`Remove ${movie.title} from board`}
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-3">
+            <span className="muted text-sm">Didn't find your movie?</span>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setManual(true)}
+            >
+              Add it manually
+            </button>
+          </div>
+        </>
+      )}
+    </Dialog>
+  );
+}
 
-  function applySize(size: number) {
-    setPendingSize(null);
-    setSelected(null);
+export function App() {
+  const [initial] = useState(readPoster);
+  const [poster, setPoster] = useState(initial.poster),
+    [warning, setWarning] = useState(initial.warning);
+  const [selected, setSelected] = useState<number | null>(null),
+    [searchSlot, setSearchSlot] = useState<number | null>(null),
+    [swapFrom, setSwapFrom] = useState<number | null>(null);
+  const [pendingSize, setPendingSize] = useState<number | null>(null),
+    [sharing, setSharing] = useState(false),
+    [shareUrl, setShareUrl] = useState("");
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{
+    message: string;
+    previous?: Poster;
+  } | null>(null);
+  const [lastPoster, setLastPoster] = useState<{
+    image: string;
+    link: string;
+  } | null>(null);
+  useEffect(
+    () => () => {
+      if (lastPoster) URL.revokeObjectURL(lastPoster.image);
+    },
+    [lastPoster],
+  );
+  const dragFrom = useRef<number | null>(null);
+  const filled = poster.slots.filter(Boolean).length,
+    complete = filled === poster.gridSize;
+  const bg = BACKGROUNDS.find((b) => b.id === poster.background)!;
+  const selectedMovie = selected === null ? null : poster.slots[selected];
+
+  function commit(next: Poster, message?: string, undo = false) {
+    setPoster(next);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      setWarning(null);
+    } catch {
+      setWarning(
+        "This board could not be saved on this device. Back it up as JSON to keep your changes.",
+      );
+    }
+    // Once a shared board is edited, reload should use the saved edits, not the original link.
+    if (location.hash.startsWith("#poster="))
+      history.replaceState(null, "", location.pathname + location.search);
+    if (message) setToast({ message, previous: undo ? poster : undefined });
+    else
+      setToast((current) =>
+        current?.previous
+          ? {
+              ...current,
+              previous: {
+                ...current.previous,
+                title: next.title,
+                background: next.background,
+                showCaptions: next.showCaptions,
+              },
+            }
+          : current,
+      );
+  }
+  function move(from: number, to: number) {
+    if (
+      from === to ||
+      to < 0 ||
+      to >= poster.gridSize ||
+      from < 0 ||
+      from >= poster.gridSize
+    )
+      return;
+    commit(
+      { ...poster, slots: moveSlot(poster.slots, from, to) },
+      `Moved to slot ${to + 1}`,
+      true,
+    );
+    setSelected(to);
     setSwapFrom(null);
-    commit({
-      ...poster,
-      gridSize: size,
-      slots: resizeSlots(poster.slots, size),
-    });
   }
-
-  function pickMovie(movie: Movie) {
-    if (searchSlot == null) return;
+  function tap(index: number) {
+    if (swapFrom !== null) {
+      if (index !== swapFrom) move(swapFrom, index);
+      setSwapFrom(null);
+      return;
+    }
+    if (!poster.slots[index]) {
+      setSearchSlot(index);
+      setSelected(null);
+    } else setSelected(selected === index ? null : index);
+  }
+  function pick(movie: Movie) {
+    if (searchSlot === null) return;
+    if (isDuplicate(poster.slots, movie, searchSlot)) {
+      setError("This movie is already on your board.");
+      return;
+    }
     const slots = [...poster.slots];
     slots[searchSlot] = movie;
-    commit({ ...poster, slots });
-    setSearchSlot(null);
+    commit({ ...poster, slots }, `Added to slot ${searchSlot + 1}`, true);
+    const next = slots.findIndex((item, i) => i > searchSlot && !item);
+    const first = slots.findIndex((item) => !item);
+    setSearchSlot(
+      poster.slots[searchSlot]
+        ? null
+        : next >= 0
+          ? next
+          : first >= 0
+            ? first
+            : null,
+    );
     setSelected(null);
   }
-
-  function removeSelected() {
-    if (selected == null) return;
+  function remove() {
+    if (selected === null) return;
     const slots = [...poster.slots];
     slots[selected] = null;
-    commit({ ...poster, slots });
+    commit({ ...poster, slots }, `Removed from slot ${selected + 1}`, true);
     setSelected(null);
   }
-
-  function clearAll() {
-    if (!confirmClear) {
-      setConfirmClear(true);
-      return;
-    }
-    setConfirmClear(false);
+  function resize(size: number) {
+    const slots = poster.slots.slice(0, size);
+    while (slots.length < size) slots.push(null);
+    commit(
+      { ...poster, gridSize: size, slots },
+      `Changed to ${size} movies`,
+      true,
+    );
     setSelected(null);
     setSwapFrom(null);
-    commit({
-      ...poster,
-      slots: Array<Movie | null>(poster.gridSize).fill(null),
-    });
+    setPendingSize(null);
   }
-
-  async function onDownload() {
-    setExportError(null);
-    setDownloading(true);
+  async function download(format: Format) {
+    setBusy(true);
+    setError(null);
     try {
-      await exportPosterPng(poster);
+      const blob = await exportPosterPng(poster, format);
+      if (format === "standard") {
+        const url = new URL(location.href);
+        url.hash = `poster=${encodePoster(poster)}`;
+        setLastPoster({ image: URL.createObjectURL(blob), link: url.href });
+      }
+      setToast({
+        message: format === "story" ? "Story downloaded" : "Poster downloaded",
+      });
     } catch (e) {
-      setExportError(
-        e instanceof Error ? e.message : "Poster download failed.",
-      );
+      setError(e instanceof Error ? e.message : "Poster download failed.");
     } finally {
-      setDownloading(false);
+      setBusy(false);
+    }
+  }
+  function share() {
+    try {
+      const url = new URL(location.href);
+      url.hash = `poster=${encodePoster(poster)}`;
+      setShareUrl(url.href);
+      setSharing(true);
+      setError(null);
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "This board could not be shared. Use a JSON backup instead.",
+      );
+    }
+  }
+  async function copyShare() {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setToast({ message: "Link copied" });
+    } catch {
+      setToast({ message: "Copy the URL from the field above." });
+    }
+  }
+  async function restore(file?: File) {
+    if (!file) return;
+    try {
+      if (file.size > 32 * 1024 * 1024)
+        throw new Error("Choose a board JSON smaller than 32 MB.");
+      const raw = JSON.parse(await file.text());
+      if (
+        !raw ||
+        !GRID_SIZES.includes(raw.gridSize) ||
+        !Array.isArray(raw.slots)
+      )
+        throw new Error("This file is not a board backup.");
+      commit(normalizePoster(raw, true), "Board restored", true);
+      setError(null);
+      setSelected(null);
+      setSwapFrom(null);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "This backup could not be read.",
+      );
     }
   }
 
   return (
-    <div className="mx-auto w-full max-w-xl px-4 pb-14 sm:px-6">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3 pt-6">
+    <main className="editor">
+      <header className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl leading-tight font-bold tracking-tight text-[var(--text)]">
-            Build your poster
-          </h1>
-          <p className="mt-1 text-sm text-[var(--dim)]">
-            Pick 9, 12, or 15 movies, arrange them in order, and export a
-            high-resolution poster.
+          <h1>Build your poster</h1>
+          <p className="muted mt-2">
+            The films that shaped you, in your order.
           </p>
         </div>
-        <p
-          className="mt-1 flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 text-xs font-medium text-[var(--dim)]"
-          aria-live="polite"
-        >
-          <span
-            className={`h-1.5 w-1.5 rounded-full ${
-              save.isPending
-                ? "animate-pulse bg-[var(--accent-2)]"
-                : save.isError
-                  ? "bg-red-400"
-                  : "bg-[var(--accent-3)]"
-            }`}
-          />
-          {save.isPending ? "Saving…" : save.isError ? "Save failed" : "Autosaved"}
+        <span className="saved" role="status">
+          {warning ? "Unsaved changes" : "Saved on this device"}
+        </span>
+      </header>
+      {warning && (
+        <p role="alert" className="error mt-3">
+          {warning}
         </p>
-      </div>
-
-      {/* Controls */}
-      <div className="mt-6 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-3.5 shadow-[0_14px_36px_-20px_rgba(0,0,0,0.85)]">
-        <div className="flex flex-wrap items-center gap-3">
-          <div
-            className="flex rounded-full border border-[var(--border)] bg-[var(--bg-deep)] p-1"
-            role="group"
-            aria-label="Grid size"
-          >
+      )}
+      <section className="controls mt-6" aria-label="Board settings">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex gap-2" role="group" aria-label="Grid size">
             {GRID_SIZES.map((size) => (
               <button
-                key={size}
                 type="button"
+                key={size}
+                className={poster.gridSize === size ? "primary" : "secondary"}
                 aria-label={`${size} movies`}
                 aria-pressed={poster.gridSize === size}
-                onClick={() => requestSize(size)}
-                className={`rounded-full px-4 py-1.5 text-sm font-semibold transition-all duration-200 ${
-                  poster.gridSize === size
-                    ? "bg-[var(--accent)] text-[var(--on-accent)] shadow-[0_4px_14px_-4px_rgba(59,130,246,0.6)]"
-                    : "text-[var(--dim)] hover:text-[var(--text)]"
-                }`}
+                onClick={() =>
+                  poster.slots.slice(size).some(Boolean)
+                    ? setPendingSize(size)
+                    : resize(size)
+                }
               >
                 {size}
               </button>
             ))}
           </div>
-          <span
-            className="ml-auto flex items-center gap-2 text-sm font-medium text-[var(--dim)] tabular-nums"
-            aria-live="polite"
-          >
-            {filled === poster.gridSize && filled > 0 && (
-              <span className="flex items-center gap-1 rounded-full bg-emerald-400/10 px-2 py-0.5 text-xs font-semibold text-emerald-300">
-                <CheckIcon />
-                Complete
-              </span>
-            )}
-            <span>
-              <span className="font-bold text-[var(--text)]">{filled}</span> of{" "}
-              {poster.gridSize} movies
-            </span>
+          <span className="muted" aria-live="polite">
+            <strong className="text-[var(--text)]">{filled}</strong> of{" "}
+            {poster.gridSize} movies
           </span>
         </div>
         <div
-          className="mt-3.5 h-2 overflow-hidden rounded-full bg-[var(--bg-deep)]"
+          className="progress mt-4"
           role="progressbar"
+          aria-label="Poster progress"
           aria-valuenow={filled}
           aria-valuemin={0}
           aria-valuemax={poster.gridSize}
-          aria-label="Poster progress"
         >
-          <div
-            className="h-full rounded-full bg-[var(--accent)] transition-all duration-500 ease-out"
-            style={{ width: `${progress}%` }}
-          />
+          <div style={{ width: `${(filled / poster.gridSize) * 100}%` }} />
         </div>
-      </div>
-
-      {pendingSize != null && (
-        <div className="animate-pop-in mt-3 rounded-2xl border border-[var(--accent)]/40 bg-[var(--surface)] p-3.5 shadow-lg">
-          <p className="text-sm text-[var(--text)]">
-            Shrinking to {pendingSize} removes the movies ranked past slot{" "}
-            {pendingSize}. Keep going?
+      </section>
+      {pendingSize !== null && (
+        <div className="controls mt-3">
+          <p>
+            Shrinking to {pendingSize} removes movies after slot {pendingSize}.
           </p>
-          <div className="mt-2.5 flex gap-2">
-            <button
-              type="button"
-              onClick={() => applySize(pendingSize)}
-              className="rounded-full bg-[var(--accent)] px-4 py-1.5 text-sm font-semibold text-[var(--on-accent)] transition hover:brightness-105 active:scale-[0.98]"
-            >
+          <div className="flex gap-2 mt-3">
+            <button className="primary" onClick={() => resize(pendingSize)}>
               Change to {pendingSize}
             </button>
-            <button
-              type="button"
-              onClick={() => setPendingSize(null)}
-              className="rounded-full border border-[var(--border)] px-4 py-1.5 text-sm font-medium text-[var(--text)] transition hover:bg-white/5 active:scale-[0.98]"
-            >
+            <button className="secondary" onClick={() => setPendingSize(null)}>
               Cancel
             </button>
           </div>
         </div>
       )}
-
-      {/* Title */}
-      <label
-        htmlFor="poster-title"
-        className="mt-7 block text-sm font-semibold text-[var(--text)]"
-      >
-        Poster title{" "}
-        <span className="font-normal text-[var(--dim)]">(optional)</span>
-      </label>
-      <div className="relative mt-2">
-        <span className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-[var(--dim-2)]">
-          <TypeIcon />
-        </span>
+      <label className="field mt-6">
+        Name or @handle <span className="muted text-sm">(optional)</span>
         <input
-          id="poster-title"
-          type="text"
           value={poster.title}
           maxLength={90}
-          placeholder="e.g. My favorite movies"
-          onChange={(e) => {
-            const next = { ...poster, title: e.target.value };
-            setPoster(next);
-            if (titleTimer.current) clearTimeout(titleTimer.current);
-            titleTimer.current = setTimeout(() => save.mutate(next), 600);
-          }}
-          className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] py-3 pr-3 pl-10 text-base text-[var(--text)] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition placeholder:text-[var(--dim-2)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/30 focus:outline-none"
+          placeholder="e.g. @Kayla"
+          onChange={(e) => commit({ ...poster, title: e.target.value })}
         />
-      </div>
-
-      {/* Poster */}
-      <div
-        className="animate-poster-in mt-5 rounded-[24px] p-3 shadow-[0_32px_70px_-24px_rgba(0,0,0,0.9),0_0_0_1px_rgba(255,255,255,0.06),inset_0_1px_0_rgba(255,255,255,0.07)] transition-colors duration-500 sm:p-4"
-        style={{ backgroundColor: bg.color }}
+      </label>
+      <label className="flex items-center gap-2 mt-4 text-sm">
+        <input
+          type="checkbox"
+          checked={poster.showCaptions}
+          onChange={(e) =>
+            commit({ ...poster, showCaptions: e.target.checked })
+          }
+        />
+        Show title and year
+      </label>
+      <section
+        className="poster mt-5"
+        style={{
+          background: bg.color,
+          color: bg.light ? "#171717" : "#fafafa",
+        }}
+        aria-label="Poster preview"
       >
+        <h2 className="text-center">{poster.gridSize} films that made me</h2>
         {poster.title.trim() && (
-          <div className="px-1 pt-1.5 pb-4">
-            <p
-              className="text-center text-[22px] leading-tight font-extrabold tracking-tight"
-              style={{ color: bg.light ? "#171717" : "#fafafa" }}
-            >
-              {poster.title.trim()}
-            </p>
-            <div
-              className="mx-auto mt-3 h-[3px] w-14 rounded-full"
-              style={{ backgroundColor: "#3b82f6" }}
-            />
-          </div>
+          <p className="text-center mt-2 text-sm">
+            The films that made {poster.title.trim()}
+          </p>
         )}
-        <div className="grid grid-cols-3 gap-2 sm:gap-2.5">
-          {poster.slots.map((slot, i) => {
-            const isSelected = selected === i;
-            const isSwapSource = swapFrom === i;
-            return (
+        <div className="grid grid-cols-3 gap-3 mt-5">
+          {poster.slots.map((movie, index) => (
+            <figure key={index} className="min-w-0">
               <button
-                key={i}
                 type="button"
-                onClick={() => onSlotTap(i)}
-                aria-label={
-                  slot
-                    ? `Slot ${i + 1}: ${slot.title}${slot.year != null ? ` (${slot.year})` : ""}`
-                    : `Slot ${i + 1}: empty — tap to search for a movie`
-                }
-                className={`group relative aspect-[2/3] w-full overflow-hidden rounded-lg transition-all duration-200 focus-visible:ring-3 focus-visible:ring-[var(--accent)] focus-visible:outline-none active:scale-[0.98] ${
-                  isSelected || isSwapSource
-                    ? "ring-3 ring-[var(--accent)]"
-                    : slot
-                      ? "hover:ring-2 hover:ring-white/40"
-                      : ""
-                }`}
-                style={{
-                  backgroundColor: bg.light ? "#d4d4d8" : "#26262a",
+                className={`slot ${selected === index || swapFrom === index ? "active" : ""}`}
+                draggable={Boolean(movie)}
+                onDragStart={(e) => {
+                  dragFrom.current = index;
+                  e.dataTransfer.setData("text/plain", String(index));
+                  e.dataTransfer.effectAllowed = "move";
                 }}
+                onDragEnd={() => {
+                  dragFrom.current = null;
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const from = dragFrom.current;
+                  if (from !== null) move(from, index);
+                  dragFrom.current = null;
+                }}
+                onClick={() => tap(index)}
+                aria-label={
+                  movie
+                    ? `Slot ${index + 1}: ${movie.title} (${movie.year ?? "year unknown"})`
+                    : `Slot ${index + 1}: empty — tap to search for a film`
+                }
               >
-                {slot ? (
-                  <>
-                    <img
-                      src={slot.posterMd}
-                      alt=""
-                      className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.04]"
-                      loading="lazy"
-                    />
-                    <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/35 to-transparent px-1.5 pt-6 pb-1.5 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-                      <span className="block truncate text-left text-[10px] leading-tight font-semibold text-white">
-                        {slot.title}
-                      </span>
-                      <span className="block truncate text-left text-[10px] leading-tight text-white/75">
-                        {movieSubline(slot)}
-                      </span>
+                {movie ? (
+                  movie.posterMd ? (
+                    <img src={movie.posterMd} alt="" draggable={false} />
+                  ) : (
+                    <span className="cover-placeholder">
+                      {movie.title}
+                      <small>{movie.year}</small>
                     </span>
-                  </>
+                  )
                 ) : (
-                  <>
-                    <span
-                      aria-hidden="true"
-                      className="pointer-events-none absolute inset-1.5 rounded-md border border-dashed"
-                      style={{
-                        borderColor: bg.light
-                          ? "rgba(23,23,23,0.28)"
-                          : "rgba(163,163,163,0.35)",
-                      }}
-                    />
-                    <span
-                      className="relative flex h-full w-full flex-col items-center justify-center gap-2"
-                      style={{ color: bg.light ? "#525252" : "#a3a3a3" }}
-                    >
-                      <span
-                        className="flex h-10 w-10 items-center justify-center rounded-full transition-all duration-200 group-hover:scale-110 group-hover:text-[var(--accent)]"
-                        style={{
-                          backgroundColor: bg.light
-                            ? "rgba(23,23,23,0.06)"
-                            : "rgba(255,255,255,0.05)",
-                          boxShadow: `inset 0 0 0 1.5px ${bg.light ? "rgba(23,23,23,0.16)" : "rgba(255,255,255,0.14)"}`,
-                        }}
-                      >
-                        <PlusIcon />
-                      </span>
-                      <span className="text-xs font-medium">Add movie</span>
-                    </span>
-                  </>
-                )}
-                <span
-                  className={`absolute top-1.5 left-1.5 z-10 flex h-5 min-w-5 items-center justify-center rounded-md px-1 text-[11px] font-bold ring-1 backdrop-blur-sm ${
-                    i < 3 && slot
-                      ? "bg-[#3b82f6] text-white ring-blue-200/50"
-                      : "bg-black/55 text-white ring-white/20"
-                  }`}
-                >
-                  {i + 1}
-                </span>
-                {isSwapSource && (
-                  <span className="absolute right-1.5 bottom-1.5 z-10 rounded-md bg-[var(--accent)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--on-accent)]">
-                    Swapping
+                  <span className="empty-slot">
+                    <span aria-hidden="true">＋</span>Add movie
                   </span>
                 )}
+                <span className="rank">{index + 1}</span>
               </button>
-            );
-          })}
+              {movie && poster.showCaptions && (
+                <figcaption className="caption">
+                  <strong title={movie.title}>{movie.title}</strong>
+                  <span>{movie.year ?? "Year unknown"}</span>
+                </figcaption>
+              )}
+              {movie && (
+                <div className="slot-moves">
+                  <button
+                    type="button"
+                    onClick={() => move(index, index - 1)}
+                    disabled={index === 0}
+                    aria-label={`Move slot ${index + 1} back`}
+                  >
+                    ←
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => move(index, index + 1)}
+                    disabled={index === poster.gridSize - 1}
+                    aria-label={`Move slot ${index + 1} forward`}
+                  >
+                    →
+                  </button>
+                </div>
+              )}
+            </figure>
+          ))}
         </div>
-        <p
-          className="pt-3.5 pb-0.5 text-center text-[10px] font-bold tracking-[0.22em] uppercase"
-          style={{ color: bg.light ? "#737373" : "#8e8e93" }}
-        >
-          {poster.gridSize} movies · ranked {filled} of {poster.gridSize}
-        </p>
-      </div>
-
-      <p className="mt-3.5 text-center text-sm text-[var(--dim)]" aria-live="polite">
-        {swapFrom != null
-          ? `Swapping slot ${swapFrom + 1} — tap another slot to swap, or tap it again to cancel.`
-          : "Tap an empty slot to search for a movie. Tap a filled slot to replace, swap, or remove it."}
+      </section>
+      <p className="muted text-sm mt-3 text-center">
+        {swapFrom !== null
+          ? `Tap a slot to swap with slot ${swapFrom + 1}.`
+          : "Tap to edit. Drag covers or use the arrows to reorder."}
       </p>
-
-      {/* Selected movie actions */}
-      {selected != null && selectedMovie && (
-        <div className="animate-pop-in mt-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-3.5 shadow-[0_16px_40px_-20px_rgba(0,0,0,0.8)]">
-          <div className="flex items-center gap-3">
-            <img
-              src={selectedMovie.posterMd}
-              alt=""
-              className="h-16 w-11 shrink-0 rounded-md object-cover shadow-md ring-1 ring-white/10"
-            />
-            <p className="min-w-0 text-sm text-[var(--text)]">
-              <span className="font-bold text-[var(--accent)]">
-                #{selected + 1}
-              </span>{" "}
-              <span className="font-semibold">{selectedMovie.title}</span>
-              <span className="block truncate text-[var(--dim)]">
-                {movieSubline(selectedMovie)}
-              </span>
-            </p>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
+      {selected !== null && selectedMovie && (
+        <section className="controls mt-3" aria-label="Selected movie actions">
+          <p>
+            <strong>
+              #{selected + 1} {selectedMovie.title}
+            </strong>{" "}
+            <span className="muted">{selectedMovie.cast}</span>
+          </p>
+          <div className="flex flex-wrap gap-2 mt-3">
             <button
               type="button"
+              className="primary"
               onClick={() => setSearchSlot(selected)}
-              className="rounded-full bg-[var(--accent)] px-4 py-1.5 text-sm font-semibold text-[var(--on-accent)] transition hover:brightness-105 active:scale-[0.98]"
             >
               Replace
             </button>
             <button
               type="button"
+              className="secondary"
+              onClick={() => move(selected, selected - 1)}
+              disabled={selected === 0}
+              aria-label="Move back"
+            >
+              ← Move back
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => move(selected, selected + 1)}
+              disabled={selected === poster.gridSize - 1}
+              aria-label="Move forward"
+            >
+              Move forward →
+            </button>
+            <button
+              type="button"
+              className="secondary"
               onClick={() => {
                 setSwapFrom(selected);
                 setSelected(null);
               }}
-              className="rounded-full border border-[var(--border)] px-4 py-1.5 text-sm font-medium text-[var(--text)] transition hover:bg-white/5 active:scale-[0.98]"
             >
               Swap…
             </button>
-            <button
-              type="button"
-              onClick={removeSelected}
-              className="rounded-full border border-[var(--border)] px-4 py-1.5 text-sm font-medium text-[var(--text)] transition hover:bg-white/5 active:scale-[0.98]"
-            >
+            <button type="button" className="secondary" onClick={remove}>
               Remove
             </button>
             <button
               type="button"
-              aria-label="Close slot actions"
+              className="secondary"
               onClick={() => setSelected(null)}
-              className="ml-auto rounded-full px-3 py-1.5 text-sm font-medium text-[var(--dim)] transition hover:text-[var(--text)]"
             >
               Done
             </button>
           </div>
-        </div>
+        </section>
       )}
-
-      {/* Background picker */}
-      <div className="mt-7">
-        <p className="text-sm font-semibold text-[var(--text)]">
-          Poster background
-        </p>
-        <div className="mt-3 flex flex-wrap gap-2.5">
-          {BACKGROUNDS.map((b) => {
-            const active = poster.background === b.id;
-            return (
-              <button
-                key={b.id}
-                type="button"
-                aria-label={`Background: ${b.label}`}
-                aria-pressed={active}
-                onClick={() => commit({ ...poster, background: b.id })}
-                className={`group flex items-center gap-2 rounded-full border py-1.5 pr-3.5 pl-1.5 transition-all duration-200 active:scale-[0.98] ${
-                  active
-                    ? "border-[var(--accent)] bg-[var(--accent-soft)]"
-                    : "border-[var(--border)] bg-[var(--surface)] hover:border-[var(--border-strong)]"
-                }`}
-              >
-                <span
-                  className="flex h-7 w-7 items-center justify-center rounded-full ring-1 ring-white/20"
-                  style={{
-                    backgroundColor: b.color,
-                    color: b.light ? "#171717" : "#fafafa",
-                  }}
-                >
-                  {active && <CheckIcon />}
-                </span>
-                <span
-                  className={`text-xs font-semibold ${
-                    active ? "text-[var(--text)]" : "text-[var(--dim)]"
-                  }`}
-                >
-                  {b.label}
-                </span>
-              </button>
+      <section className="mt-6" aria-label="Poster background">
+        <h2>Poster background</h2>
+        <div className="flex flex-wrap gap-2 mt-3">
+          {BACKGROUNDS.map((b) => (
+            <button
+              type="button"
+              key={b.id}
+              className={`background ${b.id === poster.background ? "active" : ""}`}
+              aria-label={`Background: ${b.label}`}
+              aria-pressed={b.id === poster.background}
+              onClick={() => commit({ ...poster, background: b.id })}
+            >
+              <span style={{ background: b.color }} />
+              {b.label}
+            </button>
+          ))}
+        </div>
+      </section>
+      <div className="flex flex-wrap gap-2 mt-7">
+        <button
+          type="button"
+          className="primary"
+          disabled={!complete || busy}
+          onClick={() => void download("standard")}
+        >
+          {busy ? "Rendering…" : lastPoster ? "Update poster" : "Create poster"}
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={!complete || busy}
+          onClick={() => void download("story")}
+        >
+          Download story (PNG)
+        </button>
+      </div>
+      <p className="muted text-xs mt-2">
+        {complete
+          ? "Print-ready poster or 1080 × 1920 story."
+          : "Fill every slot to create your poster."}
+      </p>
+      {lastPoster && (
+        <section className="controls mt-4" aria-label="Your last poster">
+          <h2>Your last poster</h2>
+          <p className="muted text-sm">
+            Your last generated image stays here while you edit this board.
+          </p>
+          <a
+            className="secondary inline-block mt-2"
+            href={lastPoster.image}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            View poster
+          </a>
+          <button
+            className="secondary ml-2"
+            onClick={() => {
+              setShareUrl(lastPoster.link);
+              setSharing(true);
+            }}
+          >
+            Copy last poster link
+          </button>
+        </section>
+      )}
+      <div className="flex flex-wrap gap-2 mt-5">
+        <button type="button" className="secondary" onClick={share}>
+          Share board
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          onClick={() =>
+            downloadBlob(
+              new Blob([JSON.stringify(poster, null, 2)], {
+                type: "application/json",
+              }),
+              "movies-board.json",
+            )
+          }
+        >
+          Back up board
+        </button>
+        <label className="secondary cursor-pointer">
+          Restore board
+          <input
+            type="file"
+            className="sr-only"
+            aria-label="Restore board from JSON"
+            accept="application/json,.json"
+            onChange={(e) => {
+              void restore(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
+        </label>
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => {
+            commit(
+              { ...poster, slots: Array(poster.gridSize).fill(null) },
+              "Board reset",
+              true,
             );
-          })}
+            setSelected(null);
+            setSwapFrom(null);
+          }}
+        >
+          Reset board
+        </button>
+      </div>
+      {error && (
+        <p className="error mt-3" role="alert">
+          {error}
+        </p>
+      )}
+      {toast && (
+        <div className="toast mt-4" role="status">
+          <span>{toast.message}</span>
+          {toast.previous && (
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => {
+                commit(toast.previous!);
+                setToast({ message: "Change undone" });
+                setSelected(null);
+                setSwapFrom(null);
+              }}
+            >
+              Undo
+            </button>
+          )}
+          <button
+            type="button"
+            aria-label="Dismiss notification"
+            onClick={() => setToast(null)}
+          >
+            ✕
+          </button>
         </div>
-      </div>
-
-      {/* Download + clear */}
-      <div className="mt-7 flex flex-wrap items-center gap-2.5">
-        <button
-          type="button"
-          onClick={onDownload}
-          disabled={downloading}
-          className="inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-[var(--on-accent)] shadow-[0_10px_24px_-10px_rgba(59,130,246,0.7)] transition hover:bg-[var(--accent-strong)] active:scale-[0.99] disabled:opacity-60 sm:flex-none sm:px-6"
-        >
-          <DownloadIcon />
-          {downloading ? "Rendering…" : "Download poster (PNG)"}
-        </button>
-        <button
-          type="button"
-          onClick={clearAll}
-          className={`rounded-full border px-4 py-3 text-sm font-medium transition active:scale-[0.98] ${
-            confirmClear
-              ? "border-red-400/70 bg-red-400/10 text-red-300"
-              : "border-[var(--border)] text-[var(--dim)] hover:text-[var(--text)]"
-          }`}
-        >
-          {confirmClear ? "Tap again to clear everything" : "Clear all"}
-        </button>
-      </div>
-      <p className="mt-2.5 text-xs text-[var(--dim-2)]">
-        High-resolution PNG, ready to print or share.
-      </p>
-      {exportError && (
-        <p className="mt-2 text-sm text-red-300" role="alert">
-          {exportError}
-        </p>
       )}
-      {save.isError && (
-        <p className="mt-2 text-sm text-red-300" role="alert">
-          Saving failed — your latest change may not be kept.
-        </p>
-      )}
-
-      <p className="mt-10 text-center text-xs text-[var(--dim-2)]">
-        Autosaves as you go · Poster art via IMDb
-      </p>
-
-      {searchSlot != null && (
+      <footer className="muted text-xs text-center mt-10">
+        Saved on this device · Poster art via IMDb
+      </footer>
+      {searchSlot !== null && (
         <SearchSheet
+          key={searchSlot}
           slot={searchSlot}
-          onPick={pickMovie}
+          poster={poster}
+          onRemove={(movie) =>
+            commit(
+              {
+                ...poster,
+                slots: poster.slots.map((m) =>
+                  m && isDuplicate([m], movie) ? null : m,
+                ),
+              },
+              "Film removed",
+              true,
+            )
+          }
+          onPick={pick}
           onClose={() => setSearchSlot(null)}
         />
       )}
-    </div>
-  );
-}
-
-/* ------------------------------- search sheet ------------------------------ */
-
-function SearchSheet({
-  slot,
-  onPick,
-  onClose,
-}: {
-  slot: number;
-  onPick: (movie: Movie) => void;
-  onClose: () => void;
-}) {
-  const [input, setInput] = useState("");
-  const [query, setQuery] = useState("");
-
-  useEffect(() => {
-    const t = setTimeout(() => setQuery(input.trim()), 350);
-    return () => clearTimeout(t);
-  }, [input]);
-
-  const search = useQuery({
-    queryKey: ["movie-search", query],
-    queryFn: () => api.searchMovies({ query }),
-    enabled: query.length >= 2,
-  });
-
-  const results = search.data?.results ?? [];
-
-  return (
-    <div
-      className="animate-fade-in fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm sm:items-center sm:p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Search for a movie for slot ${slot + 1}`}
-      onClick={onClose}
-    >
-      <div
-        className="animate-sheet-in flex max-h-[86vh] w-full max-w-xl flex-col rounded-t-[22px] bg-[#17171a] p-4 pb-safe shadow-2xl ring-1 ring-white/10 sm:rounded-[22px]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mx-auto mb-3 h-1 w-10 shrink-0 rounded-full bg-white/15 sm:hidden" />
-        <div className="flex items-center gap-2">
-          <h2 className="text-base font-bold tracking-tight text-[var(--text)]">
-            <span className="text-[var(--accent)]">#{slot + 1}</span> — find a
-            movie
-          </h2>
-          <button
-            type="button"
-            aria-label="Close search"
-            onClick={onClose}
-            className="ml-auto rounded-full border border-[var(--border)] p-1.5 text-[var(--dim)] transition hover:bg-white/5 hover:text-[var(--text)]"
-          >
-            <CloseIcon />
-          </button>
-        </div>
-
-        <label htmlFor="movie-search-input" className="sr-only">
-          Search movies by title
-        </label>
-        <div className="relative mt-3">
-          <span className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-[var(--dim-2)]">
-            <SearchIcon />
-          </span>
-          <input
-            id="movie-search-input"
-            type="search"
-            autoFocus
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Movie title — e.g. Alien"
-            className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] py-3 pr-3 pl-10 text-base text-[var(--text)] transition placeholder:text-[var(--dim-2)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/30 focus:outline-none"
-          />
-        </div>
-
-        <div className="mt-3 min-h-0 flex-1 overflow-y-auto">
-          {query.length < 2 && (
-            <p className="py-8 text-center text-sm text-[var(--dim)]">
-              Start typing to search for a movie.
+      {sharing && (
+        <Dialog title="Share your board" onClose={() => setSharing(false)}>
+          <p className="muted mt-4 text-sm">
+            Anyone with this link can open a copy of your board.
+          </p>
+          {poster.slots.some((a) => a?.posterLg.startsWith("data:")) && (
+            <p className="muted mt-2 text-sm">
+              Uploaded covers stay local. This link includes their movie details
+              only.
             </p>
           )}
-          {query.length >= 2 && search.isPending && (
-            <div
-              className="grid grid-cols-3 gap-2"
-              aria-label="Searching"
-              role="status"
-            >
-              {Array.from({ length: 9 }).map((_, i) => (
-                <div key={i} className="animate-pulse">
-                  <div className="aspect-[2/3] w-full rounded-lg bg-[var(--surface-2)]" />
-                  <div className="mt-1.5 h-3 w-4/5 rounded bg-[var(--surface-2)]" />
-                  <div className="mt-1 h-3 w-3/5 rounded bg-[var(--surface-2)]" />
-                </div>
-              ))}
-            </div>
-          )}
-          {query.length >= 2 && search.isError && (
-            <p className="py-8 text-center text-sm text-red-300">
-              Search failed. Check your connection and try again.
-            </p>
-          )}
-          {query.length >= 2 &&
-            search.isSuccess &&
-            results.length === 0 && (
-              <p className="py-8 text-center text-sm text-[var(--dim)]">
-                No movies found for “{query}”. Check the spelling and try
-                again.
-              </p>
-            )}
-          {results.length > 0 && (
-            <ul className="grid grid-cols-3 gap-2.5 pb-1">
-              {results.map((r) => (
-                <li key={r.imdbId}>
-                  <button
-                    type="button"
-                    onClick={() => onPick(r)}
-                    aria-label={`Pick ${r.title}${r.year != null ? ` (${r.year})` : ""} for slot ${slot + 1}`}
-                    className="group w-full text-left transition active:scale-[0.98]"
-                  >
-                    <img
-                      src={r.posterMd}
-                      alt=""
-                      className="aspect-[2/3] w-full rounded-lg object-cover shadow-md ring-1 ring-white/10 transition group-hover:ring-2 group-hover:ring-[var(--accent)]"
-                      loading="lazy"
-                    />
-                    <span className="mt-1.5 block truncate text-xs font-semibold text-[var(--text)] transition group-hover:text-[var(--accent)]">
-                      {r.title}
-                    </span>
-                    <span className="block truncate text-xs text-[var(--dim)]">
-                      {r.year != null ? r.year : r.cast}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <p className="pt-2.5 text-center text-xs text-[var(--dim-2)]">
-          Movie search and poster art via IMDb.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/* ----------------------------------- app ----------------------------------- */
-
-export function App() {
-  const posterQuery = useQuery({
-    queryKey: ["poster"],
-    queryFn: () => api.getPoster({}),
-  });
-
-  return (
-    <div className="min-h-screen text-[var(--text)]">
-      <SafeAreaTopScrim backgroundColor="var(--bg)" />
-      <main>
-        {posterQuery.isPending && (
-          <div className="flex flex-col items-center gap-3 py-20" role="status">
-            <span className="h-8 w-8 animate-spin rounded-full border-[3px] border-[var(--surface-alt)] border-t-[var(--accent)]" />
-            <p className="text-sm text-[var(--dim)]">Loading your poster…</p>
-          </div>
-        )}
-        {posterQuery.isError && (
-          <div className="mx-auto max-w-xl px-4 py-16 text-center">
-            <p className="text-sm text-red-300">
-              Couldn't load your saved poster.
-            </p>
+          <label className="field mt-4">
+            Shareable board URL
+            <input
+              readOnly
+              value={shareUrl}
+              onFocus={(e) => e.target.select()}
+            />
+          </label>
+          <div className="flex flex-wrap gap-2 mt-4">
             <button
               type="button"
-              onClick={() => posterQuery.refetch()}
-              className="mt-3 rounded-full bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[var(--on-accent)] transition hover:brightness-105 active:scale-[0.98]"
+              className="primary"
+              onClick={() => void copyShare()}
             >
-              Retry
+              Copy link
             </button>
+            <a
+              className="secondary"
+              href={`https://twitter.com/intent/tweet?text=${encodeURIComponent("The movies that shaped me")}&url=${encodeURIComponent(shareUrl)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Post on X
+            </a>
           </div>
-        )}
-        {posterQuery.isSuccess && <Editor initial={posterQuery.data} />}
-      </main>
-    </div>
+        </Dialog>
+      )}
+    </main>
   );
 }
