@@ -1,5 +1,13 @@
 # Films That Made Me
 
+**I've got too much personality to fit into nine choices.**
+
+So there's room for twelve. Or fifteen. Pick the favorites that rewired your brain,
+rearrange them until the order feels spiritually correct, and make a poster.
+
+For the movies that altered my brain chemistry and made "what's your favorite film?"
+an unreasonable question.
+
 Choose 9, 12 or 15 films, arrange their posters, and export a 4:5 poster or 9:16 story. Hosted on GitHub Pages at https://films.snackdriven.com/. No Muse runtime, database or account is required.
 
 ## Development
