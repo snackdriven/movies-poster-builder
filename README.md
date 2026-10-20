@@ -51,3 +51,7 @@ The last generated poster is cached for the current editing session only.
 For a repository Pages URL, remove the CNAME file, clear the custom domain, and build with `PAGES_BASE_PATH=/movies-poster-builder/`.
 
 Bugs and suggestions welcome via Issues; include reproduction steps and relevant checks with pull requests.
+
+## Commits and releases
+
+See [RELEASE.md](RELEASE.md) for Commitizen commands, SemVer and changelog maintenance.
