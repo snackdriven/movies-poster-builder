@@ -40,7 +40,7 @@ export function searchMovies(
           new Error("Search timed out. Try again or add the film manually."),
         );
       }, 12000);
-      globals[callback] = (data: { d?: Record<string, any>[] }) => {
+      globals[callback] = (data: { d?: Record<string, unknown>[] }) => {
         cleanup();
         if (!Array.isArray(data?.d)) {
           reject(new Error("Film search is unavailable."));
@@ -50,7 +50,11 @@ export function searchMovies(
           results: Movie[] = [];
         for (const item of data.d) {
           if (!item || typeof item !== "object") continue;
-          const src = Array.isArray(item.i) ? item.i[0] : item.i?.imageUrl;
+          const src = Array.isArray(item.i)
+            ? item.i[0]
+            : item.i && typeof item.i === "object" && "imageUrl" in item.i
+              ? item.i.imageUrl
+              : undefined;
           const image = typeof src === "string" ? safeCover(src) : "";
           if (
             typeof item.id !== "string" ||
@@ -70,7 +74,10 @@ export function searchMovies(
           results.push({
             imdbId: item.id,
             title: item.l.slice(0, 200),
-            year: Number.isInteger(item.y) ? item.y : null,
+            year:
+              typeof item.y === "number" && Number.isInteger(item.y)
+                ? item.y
+                : null,
             cast: typeof item.s === "string" ? item.s.slice(0, 200) : "",
             posterMd: sized(400),
             posterLg: sized(800),

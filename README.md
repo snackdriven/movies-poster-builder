@@ -31,6 +31,7 @@ npm run dev
 
 | Command | Purpose |
 | --- | --- |
+| `npm run lint` | Check JavaScript, TypeScript, and React hooks (zero warnings) |
 | `npm test` | Board and share-link tests |
 | `npm run test:e2e` | Desktop/mobile browser tests |
 | `npm run build` | Type-check and build |
